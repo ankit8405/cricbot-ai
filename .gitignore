@@ -23,6 +23,13 @@ yarn-debug.log*
 yarn-error.log*
 
 venv/
+__pycache__/
+*.pyc
 embeddings.json
 *.dll
 *.lib
+# System files
+.DS_Store
+Thumbs.db
+# Misc
+to_uninstall.txt
