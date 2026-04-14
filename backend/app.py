@@ -2,6 +2,7 @@
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import asyncio
 import redis
 import httpx
 import os
@@ -26,6 +27,9 @@ def normalize_host(value: str) -> str:
     return host.rstrip("/")
 
 app = FastAPI()
+
+HTTP_TIMEOUT_SECONDS = 8.0
+http_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS)
 
 app.add_middleware(
     CORSMiddleware,
@@ -115,11 +119,15 @@ TEAM_ALIASES = {
 
 def extract_player_name(query):
     lower_q = query.lower()
-    if not any(word in lower_q for word in ["stats", "average", "runs", "wickets", "strike rate", "economy"]):
-        return None
+
+    # Detect known player aliases even when only the name is provided.
     for key, name in PLAYER_ALIASES.items():
         if key in lower_q:
             return name
+
+    if not any(word in lower_q for word in ["stats", "average", "runs", "wickets", "strike rate", "economy"]):
+        return None
+
     match = re.search(r"([A-Za-z]+\s+[A-Za-z]+)", query)
     if match and len(match.group(1).split()) == 2:
         first, second = match.group(1).lower().split()
@@ -245,11 +253,30 @@ async def extract_teams(query, competition):
 
 def detect_competition_from_query(query):
     query_lower = query.lower()
-    if any(word in query_lower for word in ["ipl", "mi", "rcb", "csk", "kkr", "srh", "dc", "rr", "pbks", "gt", "lsg"]):
+
+    def has_term(term: str) -> bool:
+        if " " in term:
+            return term in query_lower
+        return re.search(rf"\b{re.escape(term)}\b", query_lower) is not None
+
+    if any(has_term(word) for word in [
+        "ipl",
+        "mumbai indians",
+        "royal challengers bangalore",
+        "chennai super kings",
+        "kolkata knight riders",
+        "sunrisers hyderabad",
+        "delhi capitals",
+        "rajasthan royals",
+        "punjab kings",
+        "gujarat titans",
+        "lucknow super giants",
+        "mi", "rcb", "csk", "kkr", "srh", "dc", "rr", "pbks", "gt", "lsg"
+    ]):
         return "ipl"
-    if any(word in query_lower for word in ["india", "australia", "england", "pakistan", "new zealand", "south africa"]):
+    if any(has_term(word) for word in ["india", "australia", "england", "pakistan", "new zealand", "south africa"]):
         return "international"
-    if any(word in query_lower for word in ["ranji", "domestic", "smat", "vijay hazare", "karnataka", "mumbai", "delhi"]):
+    if any(has_term(word) for word in ["ranji", "domestic", "smat", "vijay hazare", "karnataka", "mumbai", "delhi"]):
         return "domestic"
 
     return "unknown"
@@ -265,7 +292,26 @@ async def extract_relevant_api_payload(intent, query, payload, competition):
     if intent != "live_score" or not isinstance(payload, dict):
         return payload
 
-    matches = payload.get("data") or payload.get("matches") or []
+    matches = payload.get("data") or payload.get("matches") or payload.get("typeMatches") or []
+
+    # Some providers nest live matches under type buckets.
+    if isinstance(matches, list) and matches and all(isinstance(x, dict) and "seriesMatches" in x for x in matches):
+        flattened = []
+        for bucket in matches:
+            for series in bucket.get("seriesMatches", []):
+                for wrapper in series.get("seriesAdWrapper", {}).get("matches", []):
+                    match_info = wrapper.get("matchInfo") if isinstance(wrapper, dict) else None
+                    if isinstance(match_info, dict):
+                        flattened.append({
+                            "name": match_info.get("matchDesc") or match_info.get("seriesName") or "Unknown match",
+                            "status": match_info.get("status") or "Status unavailable",
+                            "venue": match_info.get("venueInfo", {}).get("ground") if isinstance(match_info.get("venueInfo"), dict) else None,
+                            "date": match_info.get("startDate"),
+                            "score": wrapper.get("matchScore")
+                        })
+        if flattened:
+            matches = flattened
+
     if not isinstance(matches, list) or not matches:
         return payload
 
@@ -278,6 +324,7 @@ async def extract_relevant_api_payload(intent, query, payload, competition):
                 {
                     "name": top.get("name"),
                     "status": top.get("status"),
+                    "score": top.get("score"),
                     "venue": top.get("venue"),
                     "date": top.get("date")
                 }
@@ -299,6 +346,7 @@ async def extract_relevant_api_payload(intent, query, payload, competition):
                 {
                     "name": item.get("name"),
                     "status": item.get("status"),
+                    "score": item.get("score"),
                     "venue": item.get("venue"),
                     "date": item.get("date")
                 }
@@ -317,27 +365,26 @@ async def resolve_player_id(query):
     url = f"{CRICKETDATA_BASE_URL}/players"
     params = {"apikey": CRICKETDATA_API_KEY, "offset": 0, "search": player_name}
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            for _ in range(2):
-                try:
-                    resp = await client.get(url, params=params)
-                    if resp.status_code != 200:
-                        continue
-                    payload = resp.json()
-                    players = payload.get("data", []) if isinstance(payload, dict) else []
-                    if not players:
-                        return None
-                    first = players[0] if isinstance(players[0], dict) else {}
-                    return first.get("id")
-                except Exception:
+        for _ in range(2):
+            try:
+                resp = await http_client.get(url, params=params)
+                if resp.status_code != 200:
                     continue
+                payload = resp.json()
+                players = payload.get("data", []) if isinstance(payload, dict) else []
+                if not players:
+                    return None
+                first = players[0] if isinstance(players[0], dict) else {}
+                return first.get("id")
+            except Exception:
+                continue
         return None
     except Exception:
         return None
 
 async def call_cricketdata_api(intent, query=None, competition="ipl"):
     route_by_intent = {
-        "live_score": "currentMatches",
+        "live_score": "matches",
         "schedule": "series",
         "player_stats": "players_info",
         "general": "currentMatches"
@@ -359,14 +406,13 @@ async def call_cricketdata_api(intent, query=None, competition="ipl"):
         params["id"] = player_id
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            for _ in range(2):
-                try:
-                    resp = await client.get(url, params=params)
-                    if resp.status_code == 200:
-                        return resp.json()
-                except Exception:
-                    continue
+        for _ in range(2):
+            try:
+                resp = await http_client.get(url, params=params)
+                if resp.status_code == 200:
+                    return resp.json()
+            except Exception:
+                continue
         return None
     except Exception:
         return None
@@ -374,12 +420,14 @@ async def call_cricketdata_api(intent, query=None, competition="ipl"):
 async def call_rapidapi_cricket(intent, competition="ipl"):
     route_by_intent = {
         # Free Cricbuzz API style endpoints
-        "live_score": "cricket-match-live-list",
+        "live_score": "matches/live",
         "schedule": "cricket-series",
-        "player_stats": "cricket-all-teams",
-        "general": "cricket-match-live-list",
+        "player_stats": None,
+        "general": "matches/live",
     }
-    endpoint = route_by_intent.get(intent, "cricket-match-live-list")
+    endpoint = route_by_intent.get(intent, "matches/live")
+    if not endpoint:
+        return None
     if competition == "domestic":
         return None
     url = f"{RAPIDAPI_BASE_URL}/{endpoint}"
@@ -388,31 +436,30 @@ async def call_rapidapi_cricket(intent, competition="ipl"):
         "X-RapidAPI-Host": RAPIDAPI_HOST,
     }
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            for _ in range(2):
-                try:
-                    resp = await client.get(url, headers=headers)
-                    if resp.status_code == 200:
-                        return resp.json()
-                except Exception:
-                    continue
+        for _ in range(2):
+            try:
+                resp = await http_client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    return resp.json()
+            except Exception:
+                continue
         return None
     except Exception:
         return None
 
 
 async def fetch_ipl_data(intent, query):
-    data = await call_cricketdata_api(intent, query, "ipl")
-    if not data:
-        data = await call_rapidapi_cricket(intent, "ipl")
-    return data
+    cric_task = call_cricketdata_api(intent, query, "ipl")
+    rapid_task = call_rapidapi_cricket(intent, "ipl")
+    cric_data, rapid_data = await asyncio.gather(cric_task, rapid_task)
+    return cric_data or rapid_data
 
 
 async def fetch_international_data(intent, query):
-    data = await call_cricketdata_api(intent, query, "international")
-    if not data:
-        data = await call_rapidapi_cricket(intent, "international")
-    return data
+    cric_task = call_cricketdata_api(intent, query, "international")
+    rapid_task = call_rapidapi_cricket(intent, "international")
+    cric_data, rapid_data = await asyncio.gather(cric_task, rapid_task)
+    return cric_data or rapid_data
 
 
 async def fetch_domestic_data(intent, query):
@@ -424,8 +471,7 @@ async def call_huggingface_llm(prompt):
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
     payload = {"inputs": prompt}
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(HUGGINGFACE_URL, headers=headers, json=payload)
+        resp = await http_client.post(HUGGINGFACE_URL, headers=headers, json=payload)
         if resp.status_code == 200:
             result = resp.json()
             # HuggingFace returns a list of dicts with 'generated_text'
@@ -476,8 +522,21 @@ Query: {query}
         return {"domain": "non-cricket", "type": "static", "intent": "general", "competition": "unknown", "safe": True}
 
 async def generate_llm_answer(prompt):
-    result = await call_huggingface_llm(prompt)
-    return result or "I'm having trouble generating a response right now."
+    result = None
+    for attempt in range(2):
+        result = await call_huggingface_llm(prompt)
+        if result and "loading" not in str(result).lower():
+            break
+        if attempt == 0:
+            await asyncio.sleep(1)
+
+    if not result or len(str(result).strip()) < 5 or "loading" in str(result).lower():
+        return "I couldn't process that properly. Please try again."
+    return result
+
+@app.on_event("shutdown")
+async def shutdown_http_client():
+    await http_client.aclose()
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
@@ -498,7 +557,26 @@ async def chat(request: ChatRequest):
 
     detected_competition = detect_competition_from_query(user_msg)
 
-    if any(word in user_msg_lower for word in ["score", "match", "today", "won"]):
+    # Local-first player extraction; LLM fallback only when needed.
+    player_name = extract_player_name(user_msg)
+    if not player_name:
+        for full_name in PLAYER_ALIASES.values():
+            if full_name.lower() in user_msg_lower:
+                player_name = full_name
+                break
+    if not player_name and " " in user_msg and not re.search(r"\bvs\b|\bmatch\b|\bscore\b", user_msg_lower):
+        player_name = await llm_extract_player_name(user_msg)
+
+    if player_name and not re.search(r"\bvs\b|\bmatch\b|\bscore\b", user_msg_lower):
+        decision = {
+            "domain": "cricket",
+            "type": "dynamic",
+            "intent": "player_stats",
+            "competition": detected_competition,
+            "safe": True,
+        }
+
+    elif any(word in user_msg_lower for word in ["score", "match", "today", "won"]):
         decision = {
             "domain": "cricket",
             "type": "dynamic",
@@ -514,6 +592,14 @@ async def chat(request: ChatRequest):
             "competition": detected_competition,
             "safe": True
         }
+    elif detect_team_codes(user_msg, detected_competition):
+        decision = {
+            "domain": "cricket",
+            "type": "dynamic",
+            "intent": "live_score",
+            "competition": detected_competition,
+            "safe": True
+        }
     else:
         decision = await smart_guardrail(user_msg)
         if decision.get("competition") == "unknown" and detected_competition != "unknown":
@@ -524,10 +610,20 @@ async def chat(request: ChatRequest):
     if not decision.get("safe", True):
         return ChatResponse(reply="Sorry, your query is not appropriate.")
     if decision.get("domain") != "cricket":
-        return ChatResponse(reply="Only cricket queries are allowed.")
+        return ChatResponse(reply=await generate_llm_answer(user_msg))
 
-    normalized_query = re.sub(r"\s+", " ", user_msg_lower).strip()
     intent = decision.get("intent", "general")
+    normalized_query = re.sub(r"[^\w\s]", " ", user_msg_lower)
+    normalized_query = " ".join(normalized_query.split())
+    if intent == "live_score":
+        live_tokens = [
+            token for token in normalized_query.split()
+            if token not in {"vs", "v", "score", "match", "today", "live"}
+        ]
+        normalized_query = "live_score_" + "_".join(sorted(live_tokens))
+    else:
+        normalized_query = " ".join(sorted(normalized_query.split()))
+
     competition = decision.get("competition", "unknown")
     cache_key = f"cric:{competition}:{intent}:{normalized_query}"
     if redis_client is not None:
@@ -542,6 +638,33 @@ async def chat(request: ChatRequest):
         return ChatResponse(reply=reply)
 
     if decision.get("type") == "dynamic":
+        # Player stats are knowledge-oriented and often incomplete in free APIs.
+        # Route these directly to the LLM with caching.
+        if decision.get("intent") == "player_stats":
+            target_player = player_name or (await extract_player_name_full(user_msg)) or "the player"
+            player_prompt = f"""
+Provide accurate cricket career statistics for {target_player}.
+
+Include:
+- Total international runs
+- Matches played
+- Batting average
+- Format-wise summary (Test, ODI, T20)
+
+Format:
+• Runs: ...
+• Matches: ...
+• Avg: ...
+• Formats: ...
+
+If unsure, say "approximate".
+Do NOT hallucinate.
+"""
+            reply = await generate_llm_answer(player_prompt)
+            if redis_client is not None:
+                redis_client.set(cache_key, reply, ex=1800)
+            return ChatResponse(reply=reply)
+
         if competition == "ipl":
             data = await fetch_ipl_data(decision.get("intent"), user_msg)
         elif competition == "international":
@@ -549,22 +672,54 @@ async def chat(request: ChatRequest):
         elif competition == "domestic":
             data = await fetch_domestic_data(decision.get("intent"), user_msg)
         else:
-            data = await call_cricketdata_api(decision.get("intent"), user_msg, "ipl")
+            if re.search(r"\bvs\b", user_msg_lower):
+                data = await fetch_international_data(decision.get("intent"), user_msg)
+            else:
+                data = await call_cricketdata_api(decision.get("intent"), user_msg, "ipl")
+
+        print("API RESPONSE:", data)
+
+        if not data or data == {}:
+            fallback_reply = await generate_llm_answer(user_msg)
+            if redis_client is not None:
+                redis_client.set(cache_key, fallback_reply, ex=1800)
+            return ChatResponse(reply=fallback_reply)
 
         if isinstance(data, dict) and data.get("error") == "player_id_not_found":
             return ChatResponse(reply="I could not identify the player. Please include full player name, for example: Virat Kohli.")
 
         if data:
-            payload_competition = competition if competition in {"ipl", "international", "domestic"} else "ipl"
+            payload_competition = competition if competition != "unknown" else detect_competition_from_query(user_msg)
             relevant_data = await extract_relevant_api_payload(decision.get("intent"), user_msg, data, payload_competition)
             if decision.get("intent") == "live_score" and isinstance(relevant_data, dict):
                 summary_lines = []
                 for match in relevant_data.get("data", []):
                     if isinstance(match, dict):
                         name = match.get("name", "Unknown match")
-                        status = match.get("status", "Status unavailable")
+                        score = match.get("score", [])
+                        if isinstance(score, list) and score:
+                            latest = next(
+                                (s for s in reversed(score) if isinstance(s, dict) and s.get("r") is not None),
+                                {}
+                            )
+                            runs = latest.get("r", "") if isinstance(latest, dict) else ""
+                            wickets = latest.get("w", "") if isinstance(latest, dict) else ""
+                            overs = latest.get("o", "") if isinstance(latest, dict) else ""
+                            if runs != "" and wickets != "":
+                                status = f"{runs}/{wickets} ({overs})"
+                            else:
+                                status = match.get("status", "Status unavailable")
+                        elif isinstance(score, str):
+                            status = score
+                        else:
+                            status = match.get("status", "Status unavailable")
                         summary_lines.append(f"{name} - {status}")
-                compact_data = "\n".join(summary_lines)[:1000] if summary_lines else json.dumps(relevant_data)[:1000]
+                if summary_lines:
+                    direct_reply = "\n".join(summary_lines[:2])
+                    if redis_client is not None:
+                        redis_client.set(cache_key, direct_reply, ex=20)
+                    return ChatResponse(reply=direct_reply)
+                compact_data = json.dumps(relevant_data.get("data", [])[:2]) if isinstance(relevant_data, dict) else "[]"
             elif decision.get("intent") == "player_stats" and isinstance(relevant_data, dict):
                 player_block = relevant_data
                 if isinstance(relevant_data.get("data"), dict):
@@ -573,17 +728,34 @@ async def chat(request: ChatRequest):
                     first_item = relevant_data.get("data")[0]
                     player_block = first_item if isinstance(first_item, dict) else relevant_data
 
+                stats = player_block.get("stats", {}) if isinstance(player_block, dict) else {}
+                batting = player_block.get("batting", {}) if isinstance(player_block, dict) else {}
                 name = player_block.get("name", "Player") if isinstance(player_block, dict) else "Player"
                 runs = (
-                    player_block.get("runs") or player_block.get("totalRuns") or "N/A"
+                    player_block.get("runs")
+                    or player_block.get("totalRuns")
+                    or batting.get("runs")
+                    or stats.get("runs")
+                    or stats.get("totalRuns")
+                    or "N/A"
                 ) if isinstance(player_block, dict) else "N/A"
-                match_count = player_block.get("matches", "N/A") if isinstance(player_block, dict) else "N/A"
+                match_count = (
+                    player_block.get("matches")
+                    or player_block.get("mat")
+                    or batting.get("matches")
+                    or stats.get("matches")
+                    or stats.get("mat")
+                    or "N/A"
+                ) if isinstance(player_block, dict) else "N/A"
                 direct_reply = f"{name}: Runs {runs}, Matches {match_count}."
                 if redis_client is not None:
                     redis_client.set(cache_key, direct_reply, ex=3600)
                 return ChatResponse(reply=direct_reply)
             else:
-                compact_data = json.dumps(relevant_data)[:1000]
+                if isinstance(relevant_data, dict):
+                    compact_data = json.dumps(relevant_data.get("data", [])[:2])
+                else:
+                    compact_data = json.dumps(relevant_data)[:600]
             llm_input = f"""
 You are a professional cricket analyst. Answer using ONLY the provided data. Do not guess.
 
@@ -600,8 +772,14 @@ Give a clear, concise, and fact-based answer in 1-2 sentences.
             return ChatResponse(reply=reply)
         else:
             if competition == "domestic":
-                return ChatResponse(reply="Domestic live routing is limited right now. Please try an IPL or international query, or rephrase with more detail.")
-            return ChatResponse(reply="Live match data is unavailable right now. Please try again in a moment.")
+                fallback_reply = await generate_llm_answer(user_msg)
+                if redis_client is not None:
+                    redis_client.set(cache_key, fallback_reply, ex=1800)
+                return ChatResponse(reply=fallback_reply)
+            fallback_reply = await generate_llm_answer(user_msg)
+            if redis_client is not None:
+                redis_client.set(cache_key, fallback_reply, ex=1800)
+            return ChatResponse(reply=fallback_reply)
 
     return ChatResponse(reply="Hmm, I don't have an answer for that yet 🤔. You can try rephrasing or ask something else!")
 
