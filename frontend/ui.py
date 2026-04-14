@@ -4,10 +4,8 @@ import streamlit as st
 import time
 import requests
 
-
 API_URL = os.getenv("CRICBOT_API_URL", "http://localhost:8000/chat")
 AUTO_REFRESH_INTERVAL = 10
-
 
 def check_backend_health(api_url: str) -> bool:
 	try:
@@ -15,7 +13,6 @@ def check_backend_health(api_url: str) -> bool:
 		return resp.status_code == 200
 	except Exception:
 		return False
-
 
 def ask_backend(api_url: str, message: str) -> str:
 	try:
@@ -27,9 +24,7 @@ def ask_backend(api_url: str, message: str) -> str:
 	except Exception:
 		return "Backend not reachable. Make sure FastAPI server is running."
 
-
 def parse_scorecard(line: str):
-	# Example: MI vs RCB - MI 154/4 (17.2)
 	if " - " not in line or "vs" not in line.lower():
 		return None
 
@@ -48,7 +43,6 @@ def parse_scorecard(line: str):
 		}
 	except Exception:
 		return None
-
 
 def show_scorecards(reply_text: str):
 	lines = [line.strip() for line in reply_text.splitlines() if line.strip()]
@@ -84,7 +78,6 @@ def show_scorecards(reply_text: str):
 			unsafe_allow_html=True,
 		)
 
-
 def is_live_score_query(query: str) -> bool:
 	q = query.lower().strip()
 	live_keywords = [
@@ -103,7 +96,6 @@ def is_live_score_query(query: str) -> bool:
 		return False
 
 	return any(k in q for k in live_keywords)
-
 
 st.set_page_config(page_title="CricBOTai", page_icon="", layout="centered")
 
@@ -212,8 +204,10 @@ if user_input:
 		if typing_effect and reply:
 			placeholder = st.empty()
 			full_text = ""
-			for word in reply.split():
-				full_text += word + " "
+			# Preserve original markdown/newlines while animating.
+			tokens = re.findall(r"\S+|\s+", reply)
+			for token in tokens:
+				full_text += token
 				placeholder.markdown(full_text)
 				time.sleep(0.02)
 		else:

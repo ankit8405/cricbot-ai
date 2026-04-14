@@ -1,6 +1,5 @@
 CricBOTai
 
-◦ A full-stack chatbot application which answers questions related to cricket and get quick responses in real-time.
+◦ A full-stack cricket chatbot that gives quick real-time responses for live scores, match updates, and player-related queries.
 
-◦ Integrated local CSV files as the database, enabling efficient storage and retrieval of cricket data for real-time chatbot
-responses, also implemented secure authentication.
+◦ Built with FastAPI backend and Streamlit frontend, Groq APIs and using Redis Caching.
