@@ -168,6 +168,9 @@ STRICT RULES:
 - Extract stats for BOTH entities if available.
 - If a value is missing, write "N/A".
 - Do not use "as of my last update".
+- Do not include facts that are not explicitly present in Data.
+- If runs/average/strike rate are unavailable for either side, keep that cell as N/A.
+- Summary must only describe values that appear in the table.
 
 User query:
 {user_msg}
@@ -186,6 +189,6 @@ Output format:
 | Strike Rate | ... | ... |
 
 **Summary**
-- Key insight 1
-- Key insight 2
+- <one comparison based only on table values>
+- <if N/A exists, state data is incomplete in current sources>
 """
