@@ -5,7 +5,6 @@ import re
 from config import SERPER_API_KEY, SERPER_URL, http_client, redis_client
 from core.text_processing import normalize_query_for_cache
 
-
 def detect_query_scope(query: str) -> tuple[str, str | None]:
     q = query.lower()
 
@@ -20,7 +19,6 @@ def detect_query_scope(query: str) -> tuple[str, str | None]:
         return "match", None
 
     return "career", None
-
 
 def _line_matches_scope(line: str, scope: str, year: str | None) -> bool:
     l = line.lower()
@@ -43,7 +41,6 @@ def _line_matches_scope(line: str, scope: str, year: str | None) -> bool:
         return any(x in l for x in ["over", "overs", "runs", "won", "score", "scorecard", "wicket", "target", "chase", "result", "match", "live"])
 
     return True
-
 
 def _scope_filter_lines(lines: list[str], query: str | None) -> list[str]:
     if not query:
@@ -117,7 +114,6 @@ def extract_serper_context(payload: dict) -> str:
     context = "\n".join(f"- {line}" for line in deduped[:6])
     return context[:2200]
 
-
 def _all_candidate_lines(payload: dict) -> list[str]:
     lines: list[str] = []
 
@@ -156,7 +152,6 @@ def _all_candidate_lines(payload: dict) -> list[str]:
             deduped.append(compact)
     return deduped
 
-
 def extract_stat_focused_context(payload: dict, max_lines: int = 8, query: str | None = None) -> str:
     stat_terms = (
         "runs", "matches", "average", "avg", "strike rate", "sr",
@@ -167,7 +162,6 @@ def extract_stat_focused_context(payload: dict, max_lines: int = 8, query: str |
     if not lines:
         lines = base_lines
     return "\n".join(f"- {line}" for line in lines[:max_lines])[:2600]
-
 
 def extract_structured_metrics(payload: dict, query: str | None = None) -> dict[str, str]:
     metrics: dict[str, str] = {
@@ -237,18 +231,14 @@ def extract_structured_metrics(payload: dict, query: str | None = None) -> dict[
 
     return best_metrics
 
-
 def has_any_metric(metrics: dict[str, str], fields: list[str]) -> bool:
     return any(metrics.get(field, "N/A") != "N/A" for field in fields)
-
 
 def has_minimum_batting_metrics(metrics: dict[str, str]) -> bool:
     return metrics.get("runs", "N/A") != "N/A" and metrics.get("average", "N/A") != "N/A"
 
-
 def has_minimum_bowling_metrics(metrics: dict[str, str]) -> bool:
     return metrics.get("wickets", "N/A") != "N/A" and metrics.get("economy", "N/A") != "N/A"
-
 
 def build_player_stats_markdown(title: str, metrics: dict[str, str], bowling: bool = False) -> str:
     if bowling:
@@ -280,7 +270,6 @@ def build_player_stats_markdown(title: str, metrics: dict[str, str], bowling: bo
         ]
     )
 
-
 def build_comparison_markdown(
     left_name: str,
     right_name: str,
@@ -303,7 +292,6 @@ def build_comparison_markdown(
         ]
     )
 
-
 def is_team_query(query: str) -> bool:
     q = query.lower()
     team_tokens = {
@@ -311,7 +299,6 @@ def is_team_query(query: str) -> bool:
         "india", "australia", "england", "pakistan", "new zealand", "south africa",
     }
     return any(token in q for token in team_tokens)
-
 
 def extract_team_metrics(payload: dict, query: str | None = None) -> dict[str, str]:
     metrics = {
@@ -351,12 +338,10 @@ def extract_team_metrics(payload: dict, query: str | None = None) -> dict[str, s
 
     return metrics
 
-
 def has_minimum_team_metrics(metrics: dict[str, str]) -> bool:
     has_core = metrics.get("matches", "N/A") != "N/A"
     has_support = any(metrics.get(k, "N/A") != "N/A" for k in ["wins", "losses", "rank_points"])
     return has_core and has_support
-
 
 def build_team_markdown(title: str, metrics: dict[str, str]) -> str:
     return "\n".join(
@@ -373,7 +358,6 @@ def build_team_markdown(title: str, metrics: dict[str, str]) -> str:
             "- Missing values are marked N/A.",
         ]
     )
-
 
 def extract_match_info(payload: dict, query: str | None = None) -> dict[str, str]:
     result = {
@@ -397,10 +381,8 @@ def extract_match_info(payload: dict, query: str | None = None) -> dict[str, str
 
     return result
 
-
 def has_match_info(match_info: dict[str, str]) -> bool:
     return any(match_info.get(k, "N/A") != "N/A" for k in ["summary", "score", "winner"])
-
 
 def build_match_markdown(title: str, info: dict[str, str]) -> str:
     return "\n".join(
@@ -501,7 +483,6 @@ def build_intent_serper_query(user_msg: str, intent: str) -> str:
         return f"{base} points table latest standings cricket {year} site:iplt20.com OR site:espncricinfo.com"
     return f"{base} cricket stats latest {year} site:espncricinfo.com OR site:cricbuzz.com"
 
-
 def build_entity_stats_query(entity: str, user_msg: str) -> str:
     year = datetime.now().year
     scope = "ipl" if "ipl" in user_msg.lower() else "cricket"
@@ -521,7 +502,6 @@ def build_entity_stats_query(entity: str, user_msg: str) -> str:
         f"site:espncricinfo.com OR site:cricbuzz.com {year}"
     )
 
-
 def _merge_metrics(primary: dict[str, str], fallback: dict[str, str]) -> dict[str, str]:
     merged = dict(primary)
     for key, val in fallback.items():
@@ -529,11 +509,9 @@ def _merge_metrics(primary: dict[str, str], fallback: dict[str, str]) -> dict[st
             merged[key] = val
     return merged
 
-
 def _missing_batting_fields(metrics: dict[str, str]) -> list[str]:
     wanted = ["runs", "matches", "average", "strike_rate"]
     return [field for field in wanted if metrics.get(field, "N/A") == "N/A"]
-
 
 def _metric_targeted_query(entity: str, user_msg: str, field: str) -> str:
     year = datetime.now().year
@@ -554,7 +532,6 @@ def _metric_targeted_query(entity: str, user_msg: str, field: str) -> str:
     return (
         f"{entity} {scope} {metric_phrase} site:espncricinfo.com OR site:cricbuzz.com {year}"
     )
-
 
 async def fetch_entity_metrics(entity: str, user_msg: str) -> tuple[dict[str, str], str]:
     base_query = build_entity_stats_query(entity, user_msg)

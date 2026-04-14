@@ -1,7 +1,6 @@
 import re
 from config import CRICKET_KEYWORDS
 
-
 def extract_comparison_entities(query: str) -> tuple[str, str] | None:
     q = " ".join(query.strip().split())
 
