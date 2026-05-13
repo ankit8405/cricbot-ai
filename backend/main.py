@@ -173,17 +173,23 @@ async def chat(request: ChatRequest):
             return ChatResponse(reply=reply)
 
     if format_type in {"comparison", "player_batting", "player_bowling"}:
-        web_context = extract_stat_focused_context(raw_payload, max_lines=12, query=user_msg)
+        web_context = extract_stat_focused_context(raw_payload, max_lines=20, query=user_msg)
 
-    context_limit = 12 if format_type == "comparison" else 8
+    # --- IMPROVEMENT: Increase context limit for LLM ---
+    context_limit = 30 if format_type == "comparison" else 20
     web_context = "\n".join(web_context.split("\n")[:context_limit])
     fallback_used = False
+    # --- IMPROVEMENT: Log prompt and context for debugging ---
+    import logging
+    logging.info(f"[LLM PROMPT] User: {user_msg}\nContext:\n{web_context}")
     if len(web_context.strip()) < 20:
         fallback_used = True
-        prompt = build_prompt(user_msg)
-        reply = await generate_llm_answer(prompt, temperature=0.1)
+        prompt = build_prompt(user_msg, web_context)
+        logging.info(f"[LLM FINAL PROMPT]\n{prompt}")
+        reply = await generate_llm_answer(prompt)
         if not is_valid_reply(reply):
-            reply = "Couldn't fetch data right now. Try again."
+            logging.warning(f"[LLM] Invalid reply for prompt: {prompt}")
+            reply = "Unable to fetch response right now."
         else:
             reply = enforce_markdown_structure(reply)
     else:
@@ -199,9 +205,11 @@ async def chat(request: ChatRequest):
             prompt = build_match_prompt(user_msg, web_context)
         else:
             prompt = build_formatter_prompt(user_msg, web_context)
-        reply = await generate_llm_answer(prompt, temperature=0.1)
+        logging.info(f"[LLM FINAL PROMPT]\n{prompt}")
+        reply = await generate_llm_answer(prompt)
         if not is_valid_reply(reply):
-            reply = "Couldn't fetch data right now. Try again."
+            logging.warning(f"[LLM] Invalid reply for prompt: {prompt}")
+            reply = "Unable to fetch response right now."
         else:
             reply = enforce_markdown_structure(reply)
     if fallback_used:

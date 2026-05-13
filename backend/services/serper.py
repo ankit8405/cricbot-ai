@@ -70,26 +70,26 @@ def extract_serper_context(payload: dict) -> str:
     organic = payload.get("organic", [])
     stat_like_terms = (
         "runs", "average", "avg", "strike rate", "sr", "wickets", "economy", "score", "result", "points",
+        "matches", "century", "fifty", "highest", "lowest", "innings", "not out", "batting", "bowling", "player of the match", "records", "achievements", "career", "debut", "retirement", "captain", "team", "tournament", "series", "award", "rank", "position", "milestone", "fastest", "most", "best", "top", "winner", "final", "semi-final", "qualifier"
     )
     filtered_snippets = 0
     if isinstance(organic, list):
-        for item in organic[:6]:
+        for item in organic[:10]:
             if not isinstance(item, dict):
                 continue
             title = item.get("title", "")
             snippet = item.get("snippet", "")
-            if isinstance(snippet, str) and snippet.strip():
-                if any(term in snippet.lower() for term in stat_like_terms):
-                    filtered_snippets += 1
-                else:
-                    continue
+            if any(term in (snippet or "").lower() for term in stat_like_terms) or any(term in (title or "").lower() for term in stat_like_terms):
+                filtered_snippets += 1
+            else:
+                continue
             link = item.get("link", "")
             joined = " - ".join(part for part in [title, snippet, link] if isinstance(part, str) and part.strip())
             if joined:
                 snippets.append(joined)
 
     if filtered_snippets == 0 and isinstance(organic, list):
-        for item in organic[:4]:
+        for item in organic[:8]:
             if not isinstance(item, dict):
                 continue
             title = item.get("title", "")
@@ -111,8 +111,8 @@ def extract_serper_context(payload: dict) -> str:
     if not deduped:
         return ""
 
-    context = "\n".join(f"- {line}" for line in deduped[:6])
-    return context[:2200]
+    context = "\n".join(f"- {line}" for line in deduped[:15])
+    return context[:4000]
 
 def _all_candidate_lines(payload: dict) -> list[str]:
     lines: list[str] = []
@@ -156,12 +156,13 @@ def extract_stat_focused_context(payload: dict, max_lines: int = 8, query: str |
     stat_terms = (
         "runs", "matches", "average", "avg", "strike rate", "sr",
         "wickets", "economy", "score", "won", "points", "table",
+        "century", "fifty", "highest", "lowest", "innings", "not out", "batting", "bowling", "player of the match", "records", "achievements", "career", "debut", "retirement", "captain", "team", "tournament", "series", "award", "rank", "position", "milestone", "fastest", "most", "best", "top", "winner", "final", "semi-final", "qualifier"
     )
     base_lines = _scope_filter_lines(_all_candidate_lines(payload), query)
     lines = [line for line in base_lines if any(term in line.lower() for term in stat_terms)]
     if not lines:
         lines = base_lines
-    return "\n".join(f"- {line}" for line in lines[:max_lines])[:2600]
+    return "\n".join(f"- {line}" for line in lines[:max_lines])[:4000]
 
 def extract_structured_metrics(payload: dict, query: str | None = None) -> dict[str, str]:
     metrics: dict[str, str] = {

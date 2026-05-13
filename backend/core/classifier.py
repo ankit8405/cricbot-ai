@@ -1,7 +1,7 @@
 import json
 import re
-from config import LLM_MODEL, FORMAT_TYPES, INTENTS, redis_client
-from services.llm import call_groq_llm
+from config import FORMAT_TYPES, INTENTS, redis_client
+from services.llm import generate_llm_answer
 from core.text_processing import normalize_query_for_cache
 
 def classify_query_rules(query: str) -> str | None:
@@ -60,7 +60,7 @@ Return ONLY strict one-line JSON:
 Query: {query}
 """
 
-    raw = await call_groq_llm(prompt, LLM_MODEL, temperature=0.0)
+    raw = await generate_llm_answer(prompt)
     if raw:
         text = raw.strip()
         try:
@@ -153,7 +153,7 @@ Return ONLY the label text and nothing else.
 Query: {query}
 """
 
-    raw = await call_groq_llm(prompt, LLM_MODEL, temperature=0.0)
+    raw = await generate_llm_answer(prompt)
     if not raw:
         return "general"
 

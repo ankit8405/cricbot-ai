@@ -31,10 +31,13 @@ def extract_comparison_entities(query: str) -> tuple[str, str] | None:
     return None
 
 def is_cricket_query(query: str) -> bool:
-    q = query.lower()
+    q = query.lower().strip()
     if any(k in q for k in CRICKET_KEYWORDS):
         return True
     if re.search(r"\bvs\b|\bv\b", q):
+        return True
+    # fallback for short entity-like queries (e.g., player/team names)
+    if len(q.split()) <= 3:
         return True
     return False
 

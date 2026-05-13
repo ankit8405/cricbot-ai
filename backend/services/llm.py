@@ -1,37 +1,32 @@
-from config import LLM_MODEL, GROQ_API_KEY, http_client
 
-async def call_groq_llm(prompt: str, model: str, temperature: float = 0.2) -> str | None:
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "You are a cricket-only assistant. If query is not cricket-related, refuse politely."},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": temperature,
-    }
+
+import asyncio
+from google import genai
+from config import GEMINI_API_KEY
+import logging
+
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+
+async def call_gemini_llm(prompt: str) -> str | None:
     try:
-        resp = await http_client.post(url, headers=headers, json=payload)
-        if resp.status_code == 200:
-            result = resp.json()
-            if isinstance(result, dict):
-                choices = result.get("choices", [])
-                if isinstance(choices, list) and choices:
-                    first = choices[0] if isinstance(choices[0], dict) else {}
-                    message = first.get("message", {}) if isinstance(first, dict) else {}
-                    content = message.get("content") if isinstance(message, dict) else None
-                    if isinstance(content, str) and content.strip():
-                        return content
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        text = getattr(response, "text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
         return None
-    except Exception:
+    except Exception as e:
+        logging.exception("Gemini LLM call failed")
+        print("Gemini LLM call failed:", e)
         return None
 
-async def generate_llm_answer(prompt: str, temperature: float = 0.2) -> str:
-    result = await call_groq_llm(prompt, LLM_MODEL, temperature=temperature)
+async def generate_llm_answer(prompt: str) -> str:
+    result = await call_gemini_llm(prompt)
     if result and len(result.strip()) > 10:
         return result
     return "Unable to fetch response right now."

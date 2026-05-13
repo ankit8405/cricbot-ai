@@ -1,21 +1,26 @@
-def build_prompt(user_msg: str) -> str:
+def build_prompt(user_msg: str, web_context: str = "") -> str:
     return f"""
-You are a cricket-only assistant.
+You are a cricket-only expert assistant.
 
 User query: {user_msg}
 
-Response rules:
-- Reply ONLY about cricket.
-- If the user asks for non-cricket topics, refuse briefly.
+Relevant data (from web search):
+{web_context}
+
+Instructions:
+- Use ALL relevant stats, records, and achievements from the data above.
+- Be as detailed and comprehensive as possible. List career totals, averages, records, notable performances, and any unique facts.
+- If the user asks for a player, include all available stats, records, and notable achievements.
+- If the user asks for a team or match, include all available details, scores, and context.
 - If exact live data is unavailable, say that clearly and provide a useful cricket alternative.
-- Do not fabricate uncertain facts.
+- Do not fabricate uncertain facts. Only use information from the provided data.
 
 Formatting rules (must follow exactly):
 1) Start with heading: **Answer**
-2) Then 1-2 bullet points
+2) Then 2-3 bullet points with the most important facts
 3) Then heading: **Key Points**
-4) Then 3-5 bullet points
-5) Never return a single paragraph.
+4) Then 5-8 bullet points with all other relevant stats, records, and details
+5) Never return a single paragraph. Use only bullet points as above.
 """
 
 def build_formatter_prompt(user_msg: str, web_context: str) -> str:

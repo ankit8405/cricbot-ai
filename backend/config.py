@@ -20,10 +20,11 @@ try:
 except Exception:
     redis_client = None
 
-GROQ_API_KEY = require_env("GROQ_API_KEY")
+
+# Gemini API Key (required)
+GEMINI_API_KEY = require_env("GEMINI_API_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
 SERPER_URL = "https://google.serper.dev/search"
-LLM_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant").strip()
 
 INTENTS = {
     "player_stats",

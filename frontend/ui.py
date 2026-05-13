@@ -9,7 +9,7 @@ AUTO_REFRESH_INTERVAL = 10
 
 def check_backend_health(api_url: str) -> bool:
 	try:
-		resp = requests.post(api_url, json={"message": "hello"}, timeout=6)
+		resp = requests.post(api_url, json={"message": "hello"}, timeout=10)
 		return resp.status_code == 200
 	except Exception:
 		return False
